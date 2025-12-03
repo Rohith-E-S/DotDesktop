@@ -17,11 +17,30 @@ DotDesktop is a graphical tool for managing `.desktop` files on Linux systems. I
 - 🧪 Test-run functionality before committing changes
 - 🎯 Custom delegate rendering with icon support
 
-## Quick Start
+##Installation
 
-```bash
+Option 1: AppImage (Recommended)
+
+The easiest way to run DotDesktop is using the standalone AppImage. No installation or dependencies required.
+
+Download the latest DotDesktop-x86_64.AppImage from the [suspicious link removed].
+
+Make it executable:
+
+chmod +x DotDesktop-x86_64.AppImage
+
+
+Run it:
+
+./DotDesktop-x86_64.AppImage
+
+
+Option 2: Manual Build (For Developers)
+
+If you prefer to run from source or want to contribute:
+
 # Clone the repository
-git clone https://github.com/yourusername/DotDesktop.git
+git clone [https://github.com/yourusername/DotDesktop.git](https://github.com/yourusername/DotDesktop.git)
 cd DotDesktop
 
 # Set up virtual environment
@@ -33,7 +52,9 @@ pip install -r requirements.txt
 
 # Run the application
 python3 desktop_editor.py
-```
+
+
+
 
 ## Architecture
 
