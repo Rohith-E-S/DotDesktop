@@ -1,0 +1,67 @@
+name: Build & Release AppImage
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            ccache \
+            patchelf \
+            libfuse2 \
+            libgl1 \
+            libegl1 \
+            libxkbcommon0
+
+      - name: Install Python dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install -r requirements.txt nuitka ordered-set zstandard
+
+      - name: Build AppImage
+        run: |
+          chmod +x build_appimage.sh AppRun
+          ./build_appimage.sh
+
+      - name: Upload AppImage Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DotDesktop-x86_64.AppImage
+          path: dist/DotDesktop-x86_64.AppImage
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v0.1.${{ github.run_number }}"
+          gh release create "$TAG" \
+            dist/DotDesktop-x86_64.AppImage \
+            --title "DotDesktop $TAG" \
+            --generate-notes

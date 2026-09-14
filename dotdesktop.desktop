@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=DotDesktop
+Comment=Secure Desktop Entry Editor
+Exec=desktop_editor
+Icon=dotdesktop
+Type=Application
+Categories=Utility;System;
+Terminal=false
+StartupNotify=true
