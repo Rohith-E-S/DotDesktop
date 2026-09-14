@@ -97,6 +97,21 @@ Exec=env --ozone-platform=wayland /usr/bin/code %F
 
 ---
 
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+F` | Focus the search box (selects existing text) |
+| `F5` | Rescan all application directories |
+| `Ctrl+S` | Save changes as a user override |
+| `Ctrl+L` | Show or hide the log panel |
+| `Esc` | Clear the search, or return focus to the application list |
+| `Enter` | In the search box: open the first matching application |
+
+The window title gains a `*` while an entry has unsaved edits. Switching applications, refreshing the list, or closing the window then asks whether to save, discard, or cancel.
+
+---
+
 ## Override System Application
 
 - Creates user override at:  

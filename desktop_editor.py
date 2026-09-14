@@ -11,8 +11,9 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                 QTextEdit, QMessageBox, QSplitter, QFrame, QGroupBox,
                                 QStyledItemDelegate, QStyle, QPlainTextEdit,
                                QScrollArea, QCheckBox, QSizePolicy)
-from PySide6.QtCore import Qt, QSize, QRect
-from PySide6.QtGui import QIcon, QAction, QPainter, QColor, QFont, QBrush, QPen, QPalette
+from PySide6.QtCore import Qt, QSize, QRect, QSettings
+from PySide6.QtGui import (QIcon, QAction, QPainter, QColor, QFont, QBrush, QPen,
+                           QPalette, QShortcut, QKeySequence)
 
 # Extended paths to find Snap, Flatpak, and System apps
 SEARCH_DIRS = [
@@ -103,6 +104,11 @@ class DesktopEntryEditor(QMainWindow):
         self.current_file_path = None
         self.is_user_override = False
         self.config = None
+        self._dirty = False
+        self._loading = False
+        self._original_exec = ""
+        self._shortcuts = []
+        self.settings = QSettings("DotDesktop", "DotDesktop")
         
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
@@ -129,10 +135,22 @@ class DesktopEntryEditor(QMainWindow):
         left_layout.setContentsMargins(0, 0, 5, 0)
         
         self.search_bar = QLineEdit()
-        self.search_bar.setPlaceholderText("Search applications...")
+        self.search_bar.setPlaceholderText("Search applications...  (Ctrl+F)")
         self.search_bar.setMinimumWidth(0)
+        self.search_bar.setClearButtonEnabled(True)
+        self.search_bar.setToolTip("Type to filter the list. Enter opens the first match, Esc clears.")
         self.search_bar.textChanged.connect(self.filter_list)
-        left_layout.addWidget(self.search_bar)
+        self.search_bar.returnPressed.connect(self.activate_first_match)
+        
+        search_row = QHBoxLayout()
+        search_row.setSpacing(8)
+        search_row.addWidget(self.search_bar, 1)
+        self.count_label = QLabel("")
+        self.count_label.setFixedWidth(60)
+        self.count_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.count_label.setStyleSheet("color: #a3a3a3; font-family: 'JetBrains Mono', monospace; font-size: 9pt;")
+        search_row.addWidget(self.count_label)
+        left_layout.addLayout(search_row)
         
         self.app_list = QListWidget()
         self.app_list.setItemDelegate(AppListDelegate())
@@ -147,12 +165,14 @@ class DesktopEntryEditor(QMainWindow):
         refresh_row = QHBoxLayout()
         self.refresh_row = refresh_row
         refresh_btn = QPushButton("Refresh List")
+        refresh_btn.setToolTip("Rescan all application directories (F5)")
         refresh_btn.clicked.connect(self.scan_applications)
         refresh_row.addWidget(refresh_btn, 1)
-        self.logs_toggle = QPushButton("Logs")
+        self.logs_toggle = QPushButton("Show Logs")
+        self.logs_toggle.setToolTip("Show or hide the scan and launch log (Ctrl+L)")
         self.logs_toggle.setCheckable(True)
         self.logs_toggle.setChecked(False)
-        self.logs_toggle.setFixedWidth(70)
+        self.logs_toggle.setFixedWidth(95)
         self.logs_toggle.toggled.connect(self.toggle_logs)
         refresh_row.addWidget(self.logs_toggle)
         left_layout.addLayout(refresh_row)
@@ -245,19 +265,29 @@ class DesktopEntryEditor(QMainWindow):
         self.preset_combo.setMinimumContentsLength(0)
         self.preset_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.preset_combo.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-        self.preset_combo.addItems([
-            "Select a preset to apply...",                          
-            "Force Wayland (Electron Apps) -> --ozone-platform=wayland", 
-            "Force Wayland (GTK Apps) -> env GDK_BACKEND=wayland",       
-            "Force Wayland (Qt Apps) -> env QT_QPA_PLATFORM=wayland",     
-            "Force Wayland (Firefox) -> env MOZ_ENABLE_WAYLAND=1",        
-            "Force X11/Xorg (Generic) -> env GDK_BACKEND=x11 QT_QPA_PLATFORM=xcb" 
-        ])
+        presets = [
+            ("Select a preset to apply...", ""),
+            ("Force Wayland (Electron)", "--ozone-platform=wayland"),
+            ("Force Wayland (GTK)", "GDK_BACKEND=wayland"),
+            ("Force Wayland (Qt)", "QT_QPA_PLATFORM=wayland"),
+            ("Force Wayland (Firefox)", "MOZ_ENABLE_WAYLAND=1"),
+            ("Force X11 / Xorg (Generic)", "GDK_BACKEND=x11 QT_QPA_PLATFORM=xcb"),
+        ]
+        self.preset_combo.addItems([label for label, _ in presets])
+        for idx, (_, env) in enumerate(presets):
+            self.preset_combo.setItemData(
+                idx, env or "Pick a preset to inject into the Exec command", Qt.ToolTipRole)
         apply_preset_btn = QPushButton("Inject")
+        apply_preset_btn.setToolTip("Add the selected environment override to the Exec command")
         apply_preset_btn.setFixedWidth(80)
         apply_preset_btn.clicked.connect(self.apply_preset)
+        self.reset_exec_btn = QPushButton("Reset")
+        self.reset_exec_btn.setToolTip("Undo preset edits: restore the Exec command as loaded from disk")
+        self.reset_exec_btn.setFixedWidth(80)
+        self.reset_exec_btn.clicked.connect(self.reset_exec)
         preset_layout.addWidget(self.preset_combo, 1)
         preset_layout.addWidget(apply_preset_btn)
+        preset_layout.addWidget(self.reset_exec_btn)
         injector_layout.addLayout(preset_layout)
         injector_group.setLayout(injector_layout)
         exec_layout.addWidget(injector_group)
@@ -294,12 +324,14 @@ class DesktopEntryEditor(QMainWindow):
         action_layout.setSpacing(10)
         
         self.restore_btn = QPushButton("Delete User Override")
+        self.restore_btn.setToolTip("Delete the user override and fall back to the system entry")
         self.restore_btn.setStyleSheet("QPushButton { background-color: #000000; color: #d4d4d4; border: 1px solid #444444; padding: 10px; border-radius: 8px; } QPushButton:hover { background-color: #1c1c1c; color: white; border: 1px solid white; }")
         self.restore_btn.clicked.connect(self.delete_override)
         
         self.save_btn = QPushButton("Save Changes")
+        self.save_btn.setToolTip("Write the user override and refresh the desktop database (Ctrl+S)")
         self.save_btn.setStyleSheet("QPushButton { background-color: #ffffff; color: black; border: 1px solid white; padding: 10px; border-radius: 8px; font-weight: bold; } QPushButton:hover { background-color: #e5e5e5; }")
-        self.save_btn.clicked.connect(self.save_entry)
+        self.save_btn.clicked.connect(lambda: self.save_entry())
         
         action_layout.addWidget(self.restore_btn)
         action_layout.addWidget(self.save_btn)
@@ -323,6 +355,33 @@ class DesktopEntryEditor(QMainWindow):
         self.log_view.setStyleSheet("background-color: #000000; color: #ffffff; font-family: 'JetBrains Mono', monospace; font-size: 12px; padding: 10px; border-top: 1px solid #333333; border-left: none; border-right: none; border-bottom: none;")
         main_layout.addWidget(self.log_view)
         
+        self.statusBar().setSizeGripEnabled(False)
+        self.statusBar().setStyleSheet(
+            "QStatusBar { background-color: #0d0d0d; color: #a3a3a3; border-top: 1px solid #262626; }"
+            "QStatusBar::item { border: none; } QStatusBar QLabel { color: #a3a3a3; }")
+        
+        # ponytail: native QShortcut, no menu bar invented for five keys
+        for seq, slot in (
+            ("Ctrl+F", self.focus_search),
+            ("Ctrl+S", lambda: self.save_entry()),
+            ("F5", lambda: self.scan_applications()),
+            ("Ctrl+L", self.logs_toggle.toggle),
+            ("Escape", self.clear_search),
+        ):
+            sc = QShortcut(QKeySequence(seq), self)
+            sc.activated.connect(slot)
+            self._shortcuts.append(sc)
+        
+        self._wire_dirty()
+        
+        saved_geometry = self.settings.value("geometry")
+        if saved_geometry:
+            self.restoreGeometry(saved_geometry)
+        saved_split = self.settings.value("splitter")
+        if saved_split:
+            self.splitter.restoreState(saved_split)
+        self._apply_layout_mode(self.width(), force=True)
+        
         self.scan_applications()
 
     def apply_modern_theme(self):
@@ -344,37 +403,63 @@ class DesktopEntryEditor(QMainWindow):
             QLabel { color: #d4d4d4; }
             QSplitter::handle { background-color: #262626; }
             QCheckBox { spacing: 8px; color: #d4d4d4; }
+            QCheckBox::indicator { width: 14px; height: 14px; border: 1px solid #666666; border-radius: 4px; background-color: #000000; }
+            QCheckBox::indicator:hover { border: 1px solid #ffffff; }
+            QCheckBox::indicator:checked { background-color: #ffffff; border: 1px solid #ffffff; }
+            QPushButton:focus { border: 2px solid #ffffff; }
+            QToolTip { background-color: #ffffff; color: #000000; border: 1px solid #000000; padding: 4px; }
             QScrollBar:vertical { background: #000000; width: 5px; }
             QScrollBar::handle:vertical { background: #333333; border-radius: 2px; }
+            QComboBox QAbstractItemView { background-color: #000000; color: #ffffff; border: 1px solid #444444; outline: none; }
+            QComboBox QAbstractItemView::item { padding: 6px; }
+            QComboBox QAbstractItemView::item:selected { background-color: #ffffff; color: #000000; }
+            QComboBox QAbstractItemView::item:hover { background-color: #1c1c1c; color: #ffffff; }
         """)
+        # ponytail: Fusion's default highlight is blue — force the B&W palette so
+        # selections in popups and text fields stay monochrome too.
+        app = QApplication.instance()
+        if app is not None:
+            palette = app.palette()
+            palette.setColor(QPalette.Highlight, QColor("#ffffff"))
+            palette.setColor(QPalette.HighlightedText, QColor("#000000"))
+            palette.setColor(QPalette.PlaceholderText, QColor("#8a8a8a"))
+            app.setPalette(palette)
 
     def toggle_logs(self, checked):
         self.log_view.setVisible(checked)
+        self.logs_toggle.setText("Hide Logs" if checked else "Show Logs")
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        # ponytail: two tiers — stack rows <1020, collapse list <720
+        self._apply_layout_mode(self.width())
+
+    @staticmethod
+    def _layout_mode(width):
+        # ponytail: one tier — rows stack under 1020px. The list is never hidden;
+        # at <720px the panes just get narrower (hiding it made picking an app impossible).
+        return (width < 1020,)
+
+    def _apply_layout_mode(self, width, force=False):
         from PySide6.QtWidgets import QBoxLayout
-        w = self.width()
-        stack_rows = w < 1020
-        collapsed = w < 720
-        mode = (stack_rows, collapsed)
-        if mode == self._narrow_mode:
+        mode = self._layout_mode(width)
+        if mode == self._narrow_mode and not force:
             return
         self._narrow_mode = mode
+        (stack_rows,) = mode
         stack = QBoxLayout.TopToBottom if stack_rows else QBoxLayout.LeftToRight
         self.exec_row.setDirection(stack)
         self.preset_layout.setDirection(stack)
         self.icon_layout.setDirection(stack)
         self.check_layout.setDirection(stack)
         self.action_layout.setDirection(stack)
-        if collapsed:
-            self.splitter.setSizes([0, w])
-        elif w < 1020:
-            left = max(180, min(280, w // 3))
-            self.splitter.setSizes([left, max(0, w - left)])
+        if force:
+            # keep restored/default splitter sizes until the width tier actually changes
+            return
+        if stack_rows:
+            left = max(200, min(300, width // 3))
+            self.splitter.setSizes([left, max(280, width - left)])
         else:
-            self.splitter.setSizes([400, max(280, w - 400)])
+            self.splitter.setSizes([400, max(280, width - 400)])
 
     def log(self, message):
         self.log_view.append(message)
@@ -412,6 +497,18 @@ class DesktopEntryEditor(QMainWindow):
         parent_layout.addWidget(container)
 
     def scan_applications(self):
+        if self._dirty:
+            ret = QMessageBox.question(
+                self, "Unsaved Changes",
+                "Refreshing reloads the files from disk and discards unsaved changes.\n\nContinue?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if ret != QMessageBox.Yes:
+                return
+            self._dirty = False
+            self._update_title()
+        previous_path = self.current_file_path
+        self._loading = True
+        self.app_list.blockSignals(True)
         self.app_list.clear()
         self.desktop_files = {} 
         self.log_view.clear()
@@ -455,9 +552,11 @@ class DesktopEntryEditor(QMainWindow):
         except Exception as e:
             self.log(f"   -> [ERROR] {str(e)}")
                 
-        # Populate List
-        for filename, path in sorted(self.desktop_files.items()):
-            name = self.get_app_name(path)
+        # Populate List — sorted by display name, not by filename
+        rows = [(self.get_app_name(path), filename, path)
+                for filename, path in self.desktop_files.items()]
+        rows.sort(key=lambda row: (row[0].lower(), row[1].lower()))
+        for name, filename, path in rows:
             item = QListWidgetItem() 
             item.setData(Qt.UserRole, path)
             item.setData(Qt.UserRole + 1, name)
@@ -467,6 +566,18 @@ class DesktopEntryEditor(QMainWindow):
             item.setData(Qt.UserRole + 4, self.get_icon_name(path))
             item.setText(f"{name} {filename}") 
             self.app_list.addItem(item)
+        
+        self.app_list.blockSignals(False)
+        self._loading = False
+        self.filter_list(self.search_bar.text())
+        if not (previous_path and self.select_path(previous_path)):
+            self.current_file_path = None
+            self.config = None
+            self.is_user_override = False
+            self._dirty = False
+            self.right_panel.setEnabled(False)
+            self.info_label.setText("Select an application to edit")
+            self._update_title()
             
         if sandbox_detected:
             QMessageBox.warning(self, "Sandbox Detected", "Running inside a Sandbox. Some system paths are inaccessible.")
@@ -492,9 +603,40 @@ class DesktopEntryEditor(QMainWindow):
         return None
 
     def filter_list(self, text):
+        query = text.strip().lower()
+        visible = 0
         for i in range(self.app_list.count()):
             item = self.app_list.item(i)
-            item.setHidden(text.lower() not in item.text().lower())
+            match = not query or query in item.text().lower()
+            item.setHidden(not match)
+            visible += 1 if match else 0
+        self._set_count(visible)
+        if query and visible == 0:
+            self.statusBar().showMessage(f'No applications match "{text.strip()}"', 4000)
+
+    def _set_count(self, visible):
+        total = self.app_list.count()
+        self.count_label.setText(str(total) if visible == total else f"{visible}/{total}")
+        self.count_label.setToolTip(f"{visible} of {total} applications shown")
+
+    def focus_search(self):
+        self.search_bar.setFocus()
+        self.search_bar.selectAll()
+
+    def clear_search(self):
+        if self.search_bar.text():
+            self.search_bar.clear()
+        else:
+            self.app_list.setFocus()
+
+    def activate_first_match(self):
+        for i in range(self.app_list.count()):
+            item = self.app_list.item(i)
+            if not item.isHidden():
+                self.app_list.setCurrentItem(item)
+                self.app_list.scrollToItem(item)
+                self.app_list.setFocus()
+                return
 
     def guess_toolkit(self, entry):
         exec_cmd = entry.get("Exec", "").lower()
@@ -511,8 +653,31 @@ class DesktopEntryEditor(QMainWindow):
         return 0, "Unknown"
 
     def load_selected_app(self, current, previous):
+        if previous is not None and self._dirty and not self._loading:
+            answer = self._ask_unsaved()
+            if answer == QMessageBox.Cancel:
+                self.app_list.blockSignals(True)
+                self.app_list.setCurrentItem(previous)
+                self.app_list.blockSignals(False)
+                return
+            if answer == QMessageBox.Save:
+                target = current.data(Qt.UserRole) if current else None
+                self.save_entry(rescan=True)
+                if target:
+                    self.select_path(target)
+                return
+            self._dirty = False
+            self._update_title()
+
         if not current:
+            self.current_file_path = None
+            self.config = None
+            self.is_user_override = False
+            self._dirty = False
             self.right_panel.setEnabled(False)
+            self.info_label.setText("Select an application to edit")
+            self.info_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #a3a3a3; margin-bottom: 5px;")
+            self._update_title()
             return
             
         path = current.data(Qt.UserRole)
@@ -531,6 +696,7 @@ class DesktopEntryEditor(QMainWindow):
 
         self.config = configparser.ConfigParser(interpolation=None)
         self.config.optionxform = str 
+        self._loading = True
         
         try:
             self.config.read(path)
@@ -557,8 +723,15 @@ class DesktopEntryEditor(QMainWindow):
             self.preset_combo.setCurrentIndex(preset_idx)
             self.detected_label.setText(f"Auto-detected toolkit: {toolkit}" if preset_idx > 0 else "Toolkit not detected automatically.")
             
+            self._original_exec = entry.get("Exec", "")
+            
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to parse desktop file:\n{str(e)}")
+            self.statusBar().showMessage(f"Failed to load {os.path.basename(path)}", 5000)
+        finally:
+            self._loading = False
+            self._dirty = False
+            self._update_title()
 
     def browse_icon(self):
         fname, _ = QFileDialog.getOpenFileName(self, "Select Icon", "/usr/share/icons", "Images (*.png *.svg *.xpm *.ico);;All Files (*)")
@@ -588,7 +761,15 @@ class DesktopEntryEditor(QMainWindow):
             new_exec = f"env GDK_BACKEND=x11 QT_QPA_PLATFORM=xcb {new_exec}"
         
         self.exec_edit.setPlainText(new_exec)
-        QMessageBox.information(self, "Updated", "Exec command updated. Review it before saving!")
+        if new_exec == current_exec:
+            self.statusBar().showMessage("That preset is already applied.", 3000)
+        else:
+            self.statusBar().showMessage("Exec updated. Review it, then Save Changes (Ctrl+S).", 4000)
+
+    def reset_exec(self):
+        if not self.config: return
+        self.exec_edit.setPlainText(self._original_exec)
+        self.statusBar().showMessage("Exec reverted to the value loaded from disk.", 3000)
 
     def test_run_app(self):
         cmd = self.exec_edit.toPlainText().strip()
@@ -614,7 +795,9 @@ class DesktopEntryEditor(QMainWindow):
             # [SECURE] Run without shell to prevent injection
             subprocess.Popen(args, shell=False)
             
-            QMessageBox.information(self, "Test Run", f"Launched safely:\n{args}")
+            self.log(f"[TEST] Launched: {' '.join(args)}")
+            self.logs_toggle.setChecked(True)
+            self.statusBar().showMessage(f"Test launched: {args[0]}", 4000)
         except ValueError as ve:
              QMessageBox.critical(self, "Parse Error", f"Command parsing failed (unbalanced quotes?):\n{str(ve)}")
         except Exception as e:
@@ -627,8 +810,10 @@ class DesktopEntryEditor(QMainWindow):
         else:
             self.log("update-desktop-database not found in PATH.")
 
-    def save_entry(self):
-        if not self.config: return
+    def save_entry(self, rescan=True):
+        if not self.config:
+            self.statusBar().showMessage("Nothing to save: select an application first.", 4000)
+            return
         
         # [SECURE] Basic Input Sanitization
         entry = self.config["Desktop Entry"]
@@ -675,12 +860,16 @@ class DesktopEntryEditor(QMainWindow):
             # 3. Rename atomically (overwrites target if it exists, but safely)
             os.replace(temp_path, target_path)
             
+            self._dirty = False
+            # select the override (not the system file) on the follow-up rescan
+            self.current_file_path = target_path
+            self.is_user_override = True
             self.update_desktop_db()
-            self.scan_applications()
-            QMessageBox.information(self, "Saved", f"Configuration saved safely to:\n{target_path}")
-            
-            items = self.app_list.findItems(f"{self.name_edit.text()} {filename}", Qt.MatchContains)
-            if items: self.app_list.setCurrentItem(items[0])
+            if rescan:
+                self.scan_applications()
+            self.log(f"[SAVE] Wrote {target_path}")
+            self._update_title()
+            self.statusBar().showMessage(f"Saved to {target_path}", 5000)
             
         except Exception as e:
             # Clean up temp file if it exists
@@ -691,7 +880,8 @@ class DesktopEntryEditor(QMainWindow):
     def delete_override(self):
         if not self.is_user_override: return
         ret = QMessageBox.question(self, "Confirm Restore", 
-                                   "Are you sure you want to delete your custom override?",
+                                   "Delete your custom override and fall back to the system entry?\n"
+                                   "Any unsaved edits are lost.",
                                    QMessageBox.Yes | QMessageBox.No)
         if ret == QMessageBox.Yes:
             try:
@@ -700,11 +890,66 @@ class DesktopEntryEditor(QMainWindow):
                      raise ValueError("Cannot delete files outside user directory.")
                      
                 os.remove(self.current_file_path)
+                self._dirty = False
                 self.update_desktop_db()
                 self.scan_applications()
-                QMessageBox.information(self, "Restored", "User override deleted.")
+                self.statusBar().showMessage("User override deleted. System entry restored.", 5000)
             except Exception as e:
                 QMessageBox.critical(self, "Error", str(e))
+
+    # --- Interaction helpers: dirty tracking, selection, persistence ---
+    def _wire_dirty(self):
+        for widget in (self.name_edit, self.comment_edit, self.icon_edit,
+                       self.categories_edit, self.mime_edit):
+            widget.textChanged.connect(self.mark_dirty)
+        self.exec_edit.textChanged.connect(self.mark_dirty)
+        self.terminal_check.currentTextChanged.connect(self.mark_dirty)
+        self.nodisplay_check.toggled.connect(self.mark_dirty)
+        self.startup_check.toggled.connect(self.mark_dirty)
+
+    def mark_dirty(self, *args):
+        if self._loading or not self.config or self._dirty:
+            return
+        self._dirty = True
+        self._update_title()
+
+    def _update_title(self):
+        name = os.path.basename(self.current_file_path) if self.current_file_path else ""
+        dirty_mark = " *" if self._dirty else ""
+        suffix = f" - {name}{dirty_mark}" if name else ""
+        self.setWindowTitle(f"DotDesktop - Secure Desktop Entry Editor{suffix}")
+
+    def _ask_unsaved(self):
+        name = os.path.basename(self.current_file_path) if self.current_file_path else "this entry"
+        return QMessageBox.question(
+            self, "Unsaved Changes",
+            f"Unsaved changes to {name}.\n\nSave them as a user override?",
+            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+            QMessageBox.Save)
+
+    def select_path(self, path):
+        for i in range(self.app_list.count()):
+            item = self.app_list.item(i)
+            if item.data(Qt.UserRole) == path:
+                self.app_list.setCurrentItem(item)
+                self.app_list.scrollToItem(item)
+                return True
+        return False
+
+    def closeEvent(self, event):
+        if self._dirty:
+            answer = self._ask_unsaved()
+            if answer == QMessageBox.Cancel:
+                event.ignore()
+                return
+            if answer == QMessageBox.Save:
+                self.save_entry(rescan=False)
+                if self._dirty:  # save failed, keep the window open
+                    event.ignore()
+                    return
+        self.settings.setValue("geometry", self.saveGeometry())
+        self.settings.setValue("splitter", self.splitter.saveState())
+        event.accept()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
