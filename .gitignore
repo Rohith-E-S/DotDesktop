@@ -1,5 +1,15 @@
+# Python / Virtualenv
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
 
-/venv
-/build_appimage.sh
-/DotDesktop_0.0.1-x86_64.AppImage
-/DotDesktop-x86_64.AppImage
+# Build and Packaging directories
+build/
+dist/
+AppDir/
+squashfs-root/
+appimagetool
+
+# Generated AppImages
+*.AppImage
