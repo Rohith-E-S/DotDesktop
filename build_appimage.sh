@@ -27,6 +27,9 @@ mkdir -p "$APP_DIR/usr/share/applications"
 mkdir -p "$APP_DIR/usr/share/icons/hicolor/256x256/apps"
 
 cp -r "$BUILD_DIR/desktop_editor.dist"/* "$APP_DIR/usr/bin/"
+if [ -f "$APP_DIR/usr/bin/desktop_editor.bin" ] && [ ! -f "$APP_DIR/usr/bin/desktop_editor" ]; then
+    ln -s desktop_editor.bin "$APP_DIR/usr/bin/desktop_editor"
+fi
 cp "$SCRIPT_DIR/AppRun" "$APP_DIR/AppRun"
 chmod +x "$APP_DIR/AppRun"
 
