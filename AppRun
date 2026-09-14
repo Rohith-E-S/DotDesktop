@@ -3,4 +3,11 @@ HERE="$(dirname "$(readlink -f "${0}")")"
 export LD_LIBRARY_PATH="${HERE}/usr/bin:$LD_LIBRARY_PATH"
 export QML_IMPORT_PATH="${HERE}/usr/bin"
 export QT_PLUGIN_PATH="${HERE}/usr/bin"
-exec "${HERE}/usr/bin/desktop_editor" "$@"
+if [ -f "${HERE}/usr/bin/desktop_editor" ]; then
+    exec "${HERE}/usr/bin/desktop_editor" "$@"
+elif [ -f "${HERE}/usr/bin/desktop_editor.bin" ]; then
+    exec "${HERE}/usr/bin/desktop_editor.bin" "$@"
+else
+    echo "Error: executable desktop_editor not found in ${HERE}/usr/bin" >&2
+    exit 1
+fi
