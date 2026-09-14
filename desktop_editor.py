@@ -8,9 +8,9 @@ import shlex  # [SECURE] Added for safe command parsing
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                                QHBoxLayout, QListWidget, QListWidgetItem, QLabel, 
                                QLineEdit, QPushButton, QFileDialog, QComboBox, 
-                               QTextEdit, QMessageBox, QSplitter, QFrame, QGroupBox, 
-                               QTabWidget, QStyledItemDelegate, QStyle, QPlainTextEdit,
-                               QScrollArea, QCheckBox)
+                                QTextEdit, QMessageBox, QSplitter, QFrame, QGroupBox,
+                                QStyledItemDelegate, QStyle, QPlainTextEdit,
+                               QScrollArea, QCheckBox, QSizePolicy)
 from PySide6.QtCore import Qt, QSize, QRect
 from PySide6.QtGui import QIcon, QAction, QPainter, QColor, QFont, QBrush, QPen, QPalette
 
@@ -43,16 +43,16 @@ class AppListDelegate(QStyledItemDelegate):
         
         bg_rect = option.rect
         if option.state & QStyle.State_Selected:
-            painter.fillRect(bg_rect, QColor("#3584e4"))
-            text_color = QColor("white")
-            subtext_color = QColor("#e0e0e0")
+            painter.fillRect(bg_rect, QColor("#ffffff"))
+            text_color = QColor("black")
+            subtext_color = QColor("#000000")
         elif option.state & QStyle.State_MouseOver:
-            painter.fillRect(bg_rect, QColor("#3a3a3a"))
+            painter.fillRect(bg_rect, QColor("#1a1a1a"))
             text_color = QColor("white")
-            subtext_color = QColor("#aaaaaa")
+            subtext_color = QColor("#a3a3a3")
         else:
             text_color = QColor("white")
-            subtext_color = QColor("#888888")
+            subtext_color = QColor("#a3a3a3")
 
         icon_rect = QRect(bg_rect.left() + 10, bg_rect.top() + 10, 40, 40)
         
@@ -82,8 +82,12 @@ class AppListDelegate(QStyledItemDelegate):
         
         sub_text = filename
         if is_override:
-            painter.setPen(QColor("#57e389"))
-            sub_text = f"USER OVERRIDE • {filename}"
+            # ponytail: monochrome badge, white on dark, black on white selected
+            if option.state & QStyle.State_Selected:
+                painter.setPen(QColor("#000000"))
+            else:
+                painter.setPen(QColor("#ffffff"))
+            sub_text = f"OVERRIDE • {filename}"
             
         painter.drawText(subtext_rect, Qt.AlignLeft | Qt.AlignVCenter, sub_text)
         painter.restore()
@@ -93,6 +97,7 @@ class DesktopEntryEditor(QMainWindow):
         super().__init__()
         self.setWindowTitle("DotDesktop - Secure Desktop Entry Editor")
         self.resize(1200, 850)
+        self.setMinimumSize(320, 500)
         self.apply_modern_theme()
         
         self.current_file_path = None
@@ -103,9 +108,7 @@ class DesktopEntryEditor(QMainWindow):
         self.setCentralWidget(main_widget)
         main_layout = QVBoxLayout(main_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
-        
-        self.tabs = QTabWidget()
-        main_layout.addWidget(self.tabs)
+        main_layout.setSpacing(0)
         
         editor_tab = QWidget()
         editor_layout = QHBoxLayout(editor_tab)
@@ -113,27 +116,46 @@ class DesktopEntryEditor(QMainWindow):
         
         splitter = QSplitter(Qt.Horizontal)
         splitter.setHandleWidth(2)
+        self.splitter = splitter
+        self._narrow_mode = None
         editor_layout.addWidget(splitter)
         
         # Left Panel
         left_panel = QWidget()
+        left_panel.setMinimumWidth(0)
+        left_panel.setSizePolicy(left_panel.sizePolicy().horizontalPolicy(), left_panel.sizePolicy().verticalPolicy())
+        self.left_panel = left_panel
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 5, 0)
         
         self.search_bar = QLineEdit()
         self.search_bar.setPlaceholderText("Search applications...")
+        self.search_bar.setMinimumWidth(0)
         self.search_bar.textChanged.connect(self.filter_list)
         left_layout.addWidget(self.search_bar)
         
         self.app_list = QListWidget()
         self.app_list.setItemDelegate(AppListDelegate())
         self.app_list.setFrameShape(QFrame.NoFrame)
+        self.app_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.app_list.setTextElideMode(Qt.ElideRight)
+        self.app_list.setUniformItemSizes(True)
+        self.app_list.setMinimumWidth(0)
         self.app_list.currentItemChanged.connect(self.load_selected_app)
-        left_layout.addWidget(self.app_list)
+        left_layout.addWidget(self.app_list, 1)
         
+        refresh_row = QHBoxLayout()
+        self.refresh_row = refresh_row
         refresh_btn = QPushButton("Refresh List")
         refresh_btn.clicked.connect(self.scan_applications)
-        left_layout.addWidget(refresh_btn)
+        refresh_row.addWidget(refresh_btn, 1)
+        self.logs_toggle = QPushButton("Logs")
+        self.logs_toggle.setCheckable(True)
+        self.logs_toggle.setChecked(False)
+        self.logs_toggle.setFixedWidth(70)
+        self.logs_toggle.toggled.connect(self.toggle_logs)
+        refresh_row.addWidget(self.logs_toggle)
+        left_layout.addLayout(refresh_row)
         
         splitter.addWidget(left_panel)
         
@@ -141,10 +163,15 @@ class DesktopEntryEditor(QMainWindow):
         right_scroll = QScrollArea()
         right_scroll.setWidgetResizable(True)
         right_scroll.setFrameShape(QFrame.NoFrame)
+        right_scroll.setMinimumWidth(0)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.right_scroll = right_scroll
         right_scroll.setStyleSheet("QScrollArea { background: transparent; } QWidget#RightPanel { background: transparent; }")
         
         self.right_panel = QWidget()
         self.right_panel.setObjectName("RightPanel")
+        self.right_panel.setMinimumWidth(0)
+        self.right_panel.setSizePolicy(self.right_panel.sizePolicy().horizontalPolicy(), self.right_panel.sizePolicy().verticalPolicy())
         self.right_layout = QVBoxLayout(self.right_panel)
         self.right_layout.setContentsMargins(10, 0, 15, 0)
         self.right_layout.setSpacing(20)
@@ -154,7 +181,8 @@ class DesktopEntryEditor(QMainWindow):
         
         self.info_label = QLabel("Select an application to edit")
         self.info_label.setAlignment(Qt.AlignCenter)
-        self.info_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #888; margin-bottom: 5px;")
+        self.info_label.setWordWrap(True)
+        self.info_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #a3a3a3; margin-bottom: 5px;")
         self.right_layout.addWidget(self.info_label)
         
         # Core Info
@@ -164,12 +192,15 @@ class DesktopEntryEditor(QMainWindow):
         self.comment_edit = self.create_field("Tooltip / Comment:", core_layout)
         
         icon_layout = QHBoxLayout()
+        self.icon_layout = icon_layout
         self.icon_edit = QLineEdit()
         self.icon_edit.setPlaceholderText("Icon name or path")
+        self.icon_edit.setMinimumWidth(0)
+        self.icon_edit.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         browse_icon_btn = QPushButton("Browse")
         browse_icon_btn.setFixedWidth(80)
         browse_icon_btn.clicked.connect(self.browse_icon)
-        icon_layout.addWidget(self.icon_edit)
+        icon_layout.addWidget(self.icon_edit, 1)
         icon_layout.addWidget(browse_icon_btn)
         self.add_field_layout("Icon:", icon_layout, core_layout)
         core_group.setLayout(core_layout)
@@ -180,14 +211,17 @@ class DesktopEntryEditor(QMainWindow):
         exec_layout = QVBoxLayout()
         
         exec_lbl = QLabel("Exec Command:")
-        exec_lbl.setStyleSheet("font-weight: bold; color: #ccc;")
+        exec_lbl.setStyleSheet("font-weight: bold; color: #d4d4d4;")
         exec_layout.addWidget(exec_lbl)
         
         exec_row = QHBoxLayout()
+        self.exec_row = exec_row
         self.exec_edit = QPlainTextEdit()
         self.exec_edit.setFixedHeight(70) 
         self.exec_edit.setPlaceholderText("Command to execute...")
-        exec_row.addWidget(self.exec_edit)
+        self.exec_edit.setMinimumWidth(0)
+        self.exec_edit.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        exec_row.addWidget(self.exec_edit, 1)
         
         test_run_btn = QPushButton("Test Run (Safe)")
         test_run_btn.setToolTip("Launch safely using direct process execution (No Shell)")
@@ -201,11 +235,16 @@ class DesktopEntryEditor(QMainWindow):
         injector_group = QGroupBox("Overrides Presets")
         injector_layout = QVBoxLayout()
         self.detected_label = QLabel("Auto-detecting toolkit...")
-        self.detected_label.setStyleSheet("color: #888; font-style: italic;")
+        self.detected_label.setStyleSheet("color: #a3a3a3; font-style: italic; font-family: 'JetBrains Mono', monospace;")
         injector_layout.addWidget(self.detected_label)
         
         preset_layout = QHBoxLayout()
+        self.preset_layout = preset_layout
         self.preset_combo = QComboBox()
+        self.preset_combo.setMinimumWidth(0)
+        self.preset_combo.setMinimumContentsLength(0)
+        self.preset_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.preset_combo.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.preset_combo.addItems([
             "Select a preset to apply...",                          
             "Force Wayland (Electron Apps) -> --ozone-platform=wayland", 
@@ -225,6 +264,9 @@ class DesktopEntryEditor(QMainWindow):
         
         self.terminal_check = QComboBox()
         self.terminal_check.addItems(["false", "true"])
+        self.terminal_check.setMinimumWidth(0)
+        self.terminal_check.setMinimumContentsLength(0)
+        self.terminal_check.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.add_field_layout("Run in Terminal:", self.terminal_check, exec_layout)
         
         exec_group.setLayout(exec_layout)
@@ -237,6 +279,7 @@ class DesktopEntryEditor(QMainWindow):
         self.mime_edit = self.create_field("MimeTypes (File Associations):", meta_layout)
         
         check_layout = QHBoxLayout()
+        self.check_layout = check_layout
         self.nodisplay_check = QCheckBox("Hide from App Menu (NoDisplay)")
         self.startup_check = QCheckBox("Show Launch Notification (StartupNotify)")
         check_layout.addWidget(self.nodisplay_check)
@@ -247,14 +290,15 @@ class DesktopEntryEditor(QMainWindow):
 
         # Actions
         action_layout = QHBoxLayout()
+        self.action_layout = action_layout
         action_layout.setSpacing(10)
         
         self.restore_btn = QPushButton("Delete User Override")
-        self.restore_btn.setStyleSheet("QPushButton { background-color: #c0392b; color: white; border: none; padding: 10px; border-radius: 6px; } QPushButton:hover { background-color: #e74c3c; }")
+        self.restore_btn.setStyleSheet("QPushButton { background-color: #000000; color: #d4d4d4; border: 1px solid #444444; padding: 10px; border-radius: 8px; } QPushButton:hover { background-color: #1c1c1c; color: white; border: 1px solid white; }")
         self.restore_btn.clicked.connect(self.delete_override)
         
         self.save_btn = QPushButton("Save Changes")
-        self.save_btn.setStyleSheet("QPushButton { background-color: #27ae60; color: white; border: none; padding: 10px; border-radius: 6px; font-weight: bold; } QPushButton:hover { background-color: #2ecc71; }")
+        self.save_btn.setStyleSheet("QPushButton { background-color: #ffffff; color: black; border: 1px solid white; padding: 10px; border-radius: 8px; font-weight: bold; } QPushButton:hover { background-color: #e5e5e5; }")
         self.save_btn.clicked.connect(self.save_entry)
         
         action_layout.addWidget(self.restore_btn)
@@ -264,38 +308,73 @@ class DesktopEntryEditor(QMainWindow):
         self.right_layout.addLayout(action_layout)
         
         splitter.addWidget(right_scroll)
+        splitter.setCollapsible(0, True)
+        splitter.setCollapsible(1, False)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
         splitter.setSizes([400, 800])
-        self.tabs.addTab(editor_tab, "Editor")
+        main_layout.addWidget(editor_tab, 1)
         
-        # LOGS
+        # LOGS — bottom drawer, hidden by default, no tab bar
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
-        self.log_view.setStyleSheet("background-color: #1e1e1e; color: #00ff00; font-family: monospace; padding: 10px;")
-        self.tabs.addTab(self.log_view, "Scan Logs")
+        self.log_view.setFixedHeight(140)
+        self.log_view.setVisible(False)
+        self.log_view.setStyleSheet("background-color: #000000; color: #ffffff; font-family: 'JetBrains Mono', monospace; font-size: 12px; padding: 10px; border-top: 1px solid #333333; border-left: none; border-right: none; border-bottom: none;")
+        main_layout.addWidget(self.log_view)
         
         self.scan_applications()
 
     def apply_modern_theme(self):
+        # ponytail: High Contrast B&W from Stitch, no color accents
         self.setStyleSheet("""
-            QMainWindow { background-color: #242424; }
-            QWidget { color: #ffffff; font-family: 'Segoe UI', 'Noto Sans', sans-serif; font-size: 10pt; }
-            QTabWidget::pane { border: 1px solid #3d3d3d; background: #2d2d2d; }
-            QTabBar::tab { background: #1e1e1e; color: #888; padding: 10px 20px; }
-            QTabBar::tab:selected { background: #2d2d2d; color: #fff; border-bottom: 2px solid #3584e4; }
-            QLineEdit, QComboBox, QPlainTextEdit { background-color: #383838; border: 1px solid #4a4a4a; border-radius: 6px; padding: 8px; color: white; }
-            QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus { border: 1px solid #3584e4; background-color: #404040; }
-            QListWidget { background-color: #2d2d2d; border: 1px solid #3d3d3d; border-radius: 6px; outline: none; }
-            QListWidget::item { border-bottom: 1px solid #383838; }
-            QListWidget::item:selected { background-color: #3584e4; color: white; }
-            QPushButton { background-color: #444; border: 1px solid #555; border-radius: 6px; padding: 6px 12px; color: white; }
-            QPushButton:hover { background-color: #555; }
-            QPushButton:pressed { background-color: #333; }
-            QGroupBox { border: 1px solid #444; border-radius: 6px; margin-top: 10px; padding-top: 15px; background-color: #2a2a2a; }
-            QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 5px; color: #3584e4; font-weight: bold; left: 10px; }
-            QLabel { color: #e0e0e0; }
-            QSplitter::handle { background-color: #3d3d3d; }
-            QCheckBox { spacing: 8px; color: #ddd; }
+            QMainWindow { background-color: #000000; }
+            QWidget { color: #ffffff; font-family: 'Inter', 'Noto Sans', sans-serif; font-size: 10pt; }
+            QLineEdit, QComboBox, QPlainTextEdit { background-color: #000000; border: 1px solid #333333; border-radius: 8px; padding: 8px; color: white; }
+            QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus { border: 1px solid #ffffff; background-color: #000000; }
+            QListWidget { background-color: #080808; border: 1px solid #262626; border-radius: 8px; outline: none; }
+            QListWidget::item { border-bottom: 1px solid #262626; border: 1px solid transparent; border-radius: 8px; margin: 2px; }
+            QListWidget::item:selected { background-color: #141414; color: white; border: 2px solid #ffffff; }
+            QListWidget::item:hover { background-color: #121212; border: 1px solid #333333; }
+            QPushButton { background-color: #1c1c1c; border: 1px solid #3e3e3e; border-radius: 8px; padding: 6px 12px; color: white; }
+            QPushButton:hover { background-color: #282828; border: 1px solid #ffffff; }
+            QPushButton:pressed { background-color: #000000; }
+            QGroupBox { border: 1px solid #333333; border-radius: 12px; margin-top: 10px; padding-top: 15px; background-color: #0d0d0d; }
+            QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 5px; color: #ffffff; font-weight: bold; left: 10px; text-transform: uppercase; font-size: 9pt; }
+            QLabel { color: #d4d4d4; }
+            QSplitter::handle { background-color: #262626; }
+            QCheckBox { spacing: 8px; color: #d4d4d4; }
+            QScrollBar:vertical { background: #000000; width: 5px; }
+            QScrollBar::handle:vertical { background: #333333; border-radius: 2px; }
         """)
+
+    def toggle_logs(self, checked):
+        self.log_view.setVisible(checked)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # ponytail: two tiers — stack rows <1020, collapse list <720
+        from PySide6.QtWidgets import QBoxLayout
+        w = self.width()
+        stack_rows = w < 1020
+        collapsed = w < 720
+        mode = (stack_rows, collapsed)
+        if mode == self._narrow_mode:
+            return
+        self._narrow_mode = mode
+        stack = QBoxLayout.TopToBottom if stack_rows else QBoxLayout.LeftToRight
+        self.exec_row.setDirection(stack)
+        self.preset_layout.setDirection(stack)
+        self.icon_layout.setDirection(stack)
+        self.check_layout.setDirection(stack)
+        self.action_layout.setDirection(stack)
+        if collapsed:
+            self.splitter.setSizes([0, w])
+        elif w < 1020:
+            left = max(180, min(280, w // 3))
+            self.splitter.setSizes([left, max(0, w - left)])
+        else:
+            self.splitter.setSizes([400, max(280, w - 400)])
 
     def log(self, message):
         self.log_view.append(message)
@@ -308,8 +387,11 @@ class DesktopEntryEditor(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(5)
         lbl = QLabel(label_text)
-        lbl.setStyleSheet("font-weight: bold; color: #ccc;")
+        lbl.setStyleSheet("font-weight: bold; color: #d4d4d4;")
+        lbl.setWordWrap(True)
         edit = QLineEdit()
+        edit.setMinimumWidth(0)
+        edit.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         layout.addWidget(lbl)
         layout.addWidget(edit)
         parent_layout.addWidget(container)
@@ -321,7 +403,7 @@ class DesktopEntryEditor(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(5)
         lbl = QLabel(label_text)
-        lbl.setStyleSheet("font-weight: bold; color: #ccc;")
+        lbl.setStyleSheet("font-weight: bold; color: #d4d4d4;")
         layout.addWidget(lbl)
         if isinstance(widget, (QHBoxLayout, QVBoxLayout)):
             layout.addLayout(widget)
@@ -440,11 +522,11 @@ class DesktopEntryEditor(QMainWindow):
         
         if self.is_user_override:
             self.info_label.setText(f"Editing: {os.path.basename(path)} (User Override)")
-            self.info_label.setStyleSheet("color: #57e389; font-weight: bold; font-size: 14px;")
+            self.info_label.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 14px; background: #000000; border: 1px solid #ffffff; border-radius: 12px; padding: 4px;")
             self.restore_btn.setVisible(True)
         else:
             self.info_label.setText(f"Editing: {os.path.basename(path)} (System Default)")
-            self.info_label.setStyleSheet("color: #e0e0e0; font-weight: bold; font-size: 14px;")
+            self.info_label.setStyleSheet("color: #a3a3a3; font-weight: bold; font-size: 14px;")
             self.restore_btn.setVisible(False)
 
         self.config = configparser.ConfigParser(interpolation=None)
